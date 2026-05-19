@@ -1,4 +1,4 @@
-# grain_live_forecast_openmeteo.py
+# grain_live_forecast_openmeteo_v3.py
 # Standalone Streamlit app for farmers:
 # NSW & Victoria grain buying weather outlook using Open-Meteo Seasonal Forecast API.
 # Green = BUY, Amber = WATCH, Red = CAUTION.
@@ -153,66 +153,59 @@ def make_weather_error_plain(error_text: str) -> str:
         return "The free weather service is busy or has had too many requests. Try again later."
     if "403" in tl or "401" in tl:
         return "The weather service blocked the request. This can happen on some work networks or if a paid key is needed later."
+    if "invalid string value" in tl or "forecastvariablemonthly" in tl:
+        return "The weather service rejected one of the weather fields. This version asks for the correct seasonal rain field: precipitation_mean, not precipitation_sum."
     if "no monthly data" in tl:
         return "The weather service answered, but did not send monthly rain and heat figures for this region."
     return "The weather service could not be read. The app is safely using built-in planning values instead."
 
 
-def open_meteo_param_options(region: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build a few safe Open-Meteo request options.
+def open_meteo_param_options(region: dict[str, Any]) -> list[list[tuple[str, Any]]]:
+    """Build Open-Meteo request options.
 
-    Open-Meteo's seasonal endpoint has changed names for some monthly fields over time.
-    The app tries the most likely request first, then falls back to older naming so farmers
-    do not see a broken app just because the feed naming changed.
+    Important fix: the Seasonal API does not use the same monthly rain name
+    as the normal daily forecast API.
+
+    Daily forecast uses precipitation_sum.
+    Seasonal monthly outlook uses precipitation_mean and precipitation_anomaly.
+
+    We still send monthly fields as repeated fields because Open-Meteo accepts that
+    format reliably:
+        monthly=temperature_2m_mean&monthly=precipitation_mean
     """
-    base = {
-        "latitude": region["lat"],
-        "longitude": region["lon"],
-        "forecast_days": 214,  # about 7 months
-        "timezone": "Australia/Sydney",
-    }
+    monthly_main = [
+        "temperature_2m_mean",
+        "temperature_2m_anomaly",
+        "precipitation_mean",
+        "precipitation_anomaly",
+    ]
+    monthly_alt = [
+        "temperature_2m_mean",
+        "temperature_2m_mean_anomaly",
+        "precipitation_mean",
+        "precipitation_anomaly",
+    ]
+
+    def build(model: str | None, monthly_vars: list[str]) -> list[tuple[str, Any]]:
+        params: list[tuple[str, Any]] = [
+            ("latitude", region["lat"]),
+            ("longitude", region["lon"]),
+            ("forecast_days", 214),  # about 7 months
+            ("timezone", "Australia/Sydney"),
+        ]
+        if model:
+            params.append(("models", model))
+        for var in monthly_vars:
+            params.append(("monthly", var))
+        return params
 
     return [
-        {
-            **base,
-            "models": "ecmwf_seasonal_seamless",
-            "monthly": ",".join([
-                "temperature_2m_mean",
-                "temperature_2m_mean_anomaly",
-                "precipitation_sum",
-                "precipitation_sum_anomaly",
-            ]),
-        },
-        {
-            **base,
-            "models": "ecmwf_seas5",
-            "monthly": ",".join([
-                "temperature_2m_mean",
-                "temperature_2m_mean_anomaly",
-                "precipitation_sum",
-                "precipitation_sum_anomaly",
-            ]),
-        },
-        {
-            **base,
-            "models": "ecmwf_seasonal_seamless",
-            "monthly": ",".join([
-                "temperature_2m_mean",
-                "temperature_2m_anomaly",
-                "precipitation_sum",
-                "precipitation_anomaly",
-            ]),
-        },
-        {
-            **base,
-            # Last fallback: let Open-Meteo pick the seasonal model if model naming changes again.
-            "monthly": ",".join([
-                "temperature_2m_mean",
-                "temperature_2m_mean_anomaly",
-                "precipitation_sum",
-                "precipitation_sum_anomaly",
-            ]),
-        },
+        build("ecmwf_seasonal_seamless_mean", monthly_main),
+        build("ecmwf_seas5_mean", monthly_main),
+        build("ecmwf_seasonal_seamless", monthly_main),
+        build("ecmwf_seas5", monthly_main),
+        build(None, monthly_main),
+        build(None, monthly_alt),
     ]
 
 
@@ -250,10 +243,13 @@ def fetch_open_meteo_for_region(region: dict[str, Any]) -> pd.DataFrame:
                 rows.append({
                     "region": region["name"],
                     "month": pd.to_datetime(t, errors="coerce").to_period("M").to_timestamp(),
-                    "rain_mm": pick_monthly_value(monthly, ["precipitation_sum"], i, len(times)),
-                    "rain_mm_vs_normal": pick_monthly_value(monthly, ["precipitation_sum_anomaly", "precipitation_anomaly"], i, len(times)),
+                    # Seasonal monthly rain is a monthly average signal from the model,
+                    # not an exact farm rainfall total. We use the anomaly to decide
+                    # drier/wetter than normal.
+                    "rain_mm": pick_monthly_value(monthly, ["precipitation_mean"], i, len(times)),
+                    "rain_mm_vs_normal": pick_monthly_value(monthly, ["precipitation_anomaly"], i, len(times)),
                     "temp_c": pick_monthly_value(monthly, ["temperature_2m_mean"], i, len(times)),
-                    "temp_c_vs_normal": pick_monthly_value(monthly, ["temperature_2m_mean_anomaly", "temperature_2m_anomaly"], i, len(times)),
+                    "temp_c_vs_normal": pick_monthly_value(monthly, ["temperature_2m_anomaly", "temperature_2m_mean_anomaly"], i, len(times)),
                 })
 
             return pd.DataFrame(rows).dropna(subset=["month"])
@@ -313,7 +309,7 @@ def fetch_regional_weather(regions: list[dict[str, Any]]) -> tuple[pd.DataFrame 
         return None, (
             "Could not reach the live weather service. Using built-in planning values.\n\n"
             f"Most likely reason: {plain_reason}\n\n"
-            "What the app tried to read: Open-Meteo Seasonal Forecast for rain and heat.\n\n"
+            "What the app tried to read: Open-Meteo Seasonal Forecast for monthly rain and heat.\n\n"
             "Quick checks:\n"
             "- Make sure the PC running Streamlit has internet access.\n"
             "- Try opening seasonal-api.open-meteo.com in the same browser.\n"
