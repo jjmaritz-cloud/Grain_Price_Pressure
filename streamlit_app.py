@@ -734,6 +734,86 @@ def recommendation_table(df: pd.DataFrame) -> pd.DataFrame:
     ])
 
 
+
+# -----------------------------
+# LIVE RADAR MAP
+# -----------------------------
+RADAR_LOCATIONS = [
+    {"name": "NSW/VIC grain belt overview", "lat": -35.4, "lon": 145.6, "zoom": 6},
+    {"name": "Wagga Wagga / Riverina", "lat": -35.11, "lon": 147.37, "zoom": 7},
+    {"name": "Griffith / Murrumbidgee", "lat": -34.29, "lon": 146.05, "zoom": 7},
+    {"name": "Dubbo / Central West NSW", "lat": -32.25, "lon": 148.60, "zoom": 7},
+    {"name": "Horsham / Wimmera", "lat": -36.71, "lon": 142.20, "zoom": 7},
+    {"name": "Bendigo / Central Victoria", "lat": -36.76, "lon": 144.28, "zoom": 7},
+]
+
+
+def render_radar_weather_map() -> None:
+    """Show a simple live radar map page for current rain.
+
+    This is deliberately kept separate from the 3-6 month outlook.
+    The radar is useful for today's rain and short-term movement, while the
+    main buying page is for seasonal pressure and buying decisions.
+    """
+    st.title("🌧️ Live Rain Radar Map")
+    st.caption("Use this to see current rain around the grain regions. It is for today/now, not a long-term price forecast.")
+
+    c1, c2 = st.columns([1.2, 2.8])
+    with c1:
+        place_name = st.selectbox(
+            "Area to view",
+            [r["name"] for r in RADAR_LOCATIONS],
+            index=0,
+            help="Pick a broad grain area or one of the key regions.",
+        )
+        selected = next(r for r in RADAR_LOCATIONS if r["name"] == place_name)
+        st.markdown(
+            """
+            <div class='card'>
+              <div class='card-title'>Plain read</div>
+              <div class='card-sub'>
+                This map shows rain that is around now and where it has been moving recently.
+                It helps with short-term checking, but the main buying page is still the place
+                for 3–6 month rain, heat and price-pressure guidance.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.info("Tip: use the + / - buttons on the map to zoom in around farms or supplier areas.")
+
+    with c2:
+        # RainViewer public map embed. It provides a simple animated radar layer without keys.
+        loc = f"{selected['lat']},{selected['lon']},{selected['zoom']}"
+        radar_url = (
+            "https://www.rainviewer.com/map.html?"
+            f"loc={loc}"
+            "&oFa=1&oC=1&oU=0&oCS=1&oF=0&oAP=1"
+            "&c=3&o=83&lm=1&layer=radar&sm=1&sn=1&hu=1"
+        )
+        html = f"""
+        <iframe
+            src="{radar_url}"
+            width="100%"
+            height="720"
+            frameborder="0"
+            style="border:1px solid #e2e8f0; border-radius:18px; box-shadow:0 2px 8px rgba(15,23,42,0.06);"
+            allowfullscreen>
+        </iframe>
+        """
+        components.html(html, height=740, scrolling=False)
+
+    st.markdown(
+        """
+        <p class='source-note'>
+        Radar map: RainViewer public radar map. It is useful for current rain movement and quick visual checks.
+        It should not be used as the seasonal rain outlook that drives the buying pressure score.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # -----------------------------
 # APP CONTENT
 # -----------------------------
@@ -741,20 +821,38 @@ st.title("🌾 Grain Weather Buying Outlook")
 st.caption("Simple buying guide for NSW/VIC grain. Green = BUY, amber = WATCH, red = CAUTION.")
 
 with st.sidebar:
-    st.header("Settings")
-    data_mode = st.radio(
-        "Weather data",
-        ["Live weather outlook", "Built-in planning values"],
+    st.header("Menu")
+    page = st.radio(
+        "Choose page",
+        ["Buying Outlook", "Radar Map"],
         index=0,
-        help="Live weather uses Open-Meteo's seasonal outlook for key NSW/VIC grain regions.",
     )
-    show_callouts = st.checkbox("Show crop notes on chart", value=True)
     st.divider()
-    st.markdown("### Regions included")
-    for r in DEFAULT_REGIONS:
-        st.caption(f"• {r['name']}")
-    st.divider()
-    st.caption("This is a buying aid, not a guaranteed price forecast. Use it with cover position, supplier offers and local crop reports.")
+
+    if page == "Radar Map":
+        st.header("Radar")
+        st.caption("Current rain map for quick checks.")
+        data_mode = "Live weather outlook"
+        show_callouts = True
+    else:
+        st.header("Settings")
+        data_mode = st.radio(
+            "Weather data",
+            ["Live weather outlook", "Built-in planning values"],
+            index=0,
+            help="Live weather uses Open-Meteo's seasonal outlook for key NSW/VIC grain regions.",
+        )
+        show_callouts = st.checkbox("Show crop notes on chart", value=True)
+        st.divider()
+        st.markdown("### Regions included")
+        for r in DEFAULT_REGIONS:
+            st.caption(f"• {r['name']}")
+        st.divider()
+        st.caption("This is a buying aid, not a guaranteed price forecast. Use it with cover position, supplier offers and local crop reports.")
+
+if page == "Radar Map":
+    render_radar_weather_map()
+    st.stop()
 
 base_df = build_default_monthly_data()
 live_status = "Using built-in planning values."
